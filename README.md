@@ -17,6 +17,7 @@ A small React app for turning one or more quotes into downloadable PNG wallpaper
 - Center quote text vertically and horizontally.
 - Reset quote inputs after generation.
 - Name downloads with the first five words of each quote, for example `qwp-stay-hungry-stay-foolish.png`.
+- Keyboard shortcuts for adding quotes, deleting the focused quote, and creating wallpapers.
 
 ## Tech Stack
 
@@ -73,3 +74,9 @@ pnpm format
 3. Click **Create Wallpapers**.
 4. The app creates a canvas for each non-empty quote, draws the background and centered text, then downloads the PNG.
 5. The quote inputs reset after generation, while the selected colors and resolution remain selected.
+
+## Keyboard Shortcuts
+
+- `Ctrl+Enter` / `Cmd+Enter`: add a new quote input and focus it. If there is only one empty quote, focus that existing input instead.
+- `Ctrl+Backspace` / `Cmd+Backspace`: delete the currently focused quote input.
+- `Ctrl+S` / `Cmd+S`: create and download wallpapers.

@@ -1,6 +1,6 @@
 import { Plus, X } from 'lucide-react'
 import type { FormEvent } from 'react'
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { Button } from './components/ui/button'
 import {
@@ -217,10 +217,29 @@ function App() {
   const [backgroundColor, setBackgroundColor] = useState('#121212')
   const [textColor, setTextColor] = useState('#ffffff')
   const [selectedResolution, setSelectedResolution] = useState(resolutions[0])
+  const [focusedQuoteId, setFocusedQuoteId] = useState<string | null>(null)
+  const formRef = useRef<HTMLFormElement | null>(null)
+  const quoteTextareaRefs = useRef<Record<string, HTMLTextAreaElement | null>>({})
 
-  function addQuote() {
-    setQuotes((currentQuotes) => [...currentQuotes, createQuoteInput()])
-  }
+  const focusQuote = useCallback((id: string) => {
+    window.requestAnimationFrame(() => {
+      quoteTextareaRefs.current[id]?.focus()
+    })
+  }, [])
+
+  const addQuote = useCallback(() => {
+    const newQuote = createQuoteInput()
+
+    setQuotes((currentQuotes) => {
+      if (currentQuotes.length === 1 && !currentQuotes[0].value.trim()) {
+        focusQuote(currentQuotes[0].id)
+        return currentQuotes
+      }
+
+      focusQuote(newQuote.id)
+      return [...currentQuotes, newQuote]
+    })
+  }, [focusQuote])
 
   function updateQuote(id: string, quote: string) {
     setQuotes((currentQuotes) =>
@@ -230,9 +249,56 @@ function App() {
     )
   }
 
-  function deleteQuote(id: string) {
-    setQuotes((currentQuotes) => currentQuotes.filter((currentQuote) => currentQuote.id !== id))
-  }
+  const deleteQuote = useCallback((id: string) => {
+    setQuotes((currentQuotes) => {
+      if (currentQuotes.length === 1) {
+        const nextQuote = createQuoteInput()
+
+        focusQuote(nextQuote.id)
+        return [nextQuote]
+      }
+
+      const deletedQuoteIndex = currentQuotes.findIndex((currentQuote) => currentQuote.id === id)
+      const nextQuotes = currentQuotes.filter((currentQuote) => currentQuote.id !== id)
+      const nextFocusedQuote =
+        nextQuotes[Math.min(Math.max(deletedQuoteIndex, 0), nextQuotes.length - 1)]
+
+      if (nextFocusedQuote) {
+        focusQuote(nextFocusedQuote.id)
+      }
+
+      return nextQuotes
+    })
+  }, [focusQuote])
+
+  const deleteFocusedQuote = useCallback(() => {
+    if (focusedQuoteId) {
+      deleteQuote(focusedQuoteId)
+    }
+  }, [deleteQuote, focusedQuoteId])
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+        event.preventDefault()
+        addQuote()
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Backspace') {
+        event.preventDefault()
+        deleteFocusedQuote()
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        formRef.current?.requestSubmit()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [addQuote, deleteFocusedQuote])
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -256,7 +322,7 @@ function App() {
   return (
     <main className="flex flex-col items-center h-screen py-16 gap-8">
       <h1 className="text-4xl font-bold">Quote Wallpaper Generator</h1>
-      <form className="w-full max-w-md" onSubmit={handleSubmit}>
+      <form ref={formRef} className="w-full max-w-md" onSubmit={handleSubmit}>
         <Card className="w-full">
           <CardHeader>
             <CardTitle>Create quotes</CardTitle>
@@ -269,8 +335,13 @@ function App() {
                   <Field key={quote.id}>
                     <div className="relative">
                       <Textarea
+                        ref={(element) => {
+                          quoteTextareaRefs.current[quote.id] = element
+                        }}
                         value={quote.value}
                         onChange={(event) => updateQuote(quote.id, event.target.value)}
+                        onFocus={() => setFocusedQuoteId(quote.id)}
+                        onBlur={() => setFocusedQuoteId(null)}
                         placeholder="Enter your quote here"
                         className="pr-10"
                       />
@@ -290,7 +361,14 @@ function App() {
                   </Field>
                 ))}
                 <div className="flex justify-end">
-                  <Button type="button" variant="outline" size="sm" onClick={addQuote}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    aria-keyshortcuts="Control+Enter Meta+Enter"
+                    title="Add quote (Ctrl+Enter or Cmd+Enter). Delete focused quote with Ctrl+Backspace or Cmd+Backspace."
+                    onClick={addQuote}
+                  >
                     <Plus />
                     Add quote
                   </Button>
@@ -354,6 +432,8 @@ function App() {
             <Button
               type="submit"
               className="w-full"
+              aria-keyshortcuts="Control+S Meta+S"
+              title="Create wallpapers (Ctrl+S or Cmd+S)"
               disabled={!quotes.some((quote) => quote.value.trim())}
             >
               Create Wallpapers
