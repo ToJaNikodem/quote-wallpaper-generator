@@ -1,3 +1,4 @@
+import JSZip from 'jszip'
 import { Plus, X } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -144,11 +145,27 @@ function getQuoteLayout(
   return { fontSize, lineHeight, lines }
 }
 
-function downloadCanvas(canvas: HTMLCanvasElement, filename: string) {
+function downloadBlob(blob: Blob, filename: string) {
   const link = document.createElement('a')
+  const objectUrl = URL.createObjectURL(blob)
+
   link.download = filename
-  link.href = canvas.toDataURL('image/png')
+  link.href = objectUrl
   link.click()
+
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
+}
+
+function getCanvasBlob(canvas: HTMLCanvasElement) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) {
+        resolve(blob)
+      } else {
+        reject(new Error('Unable to create wallpaper image.'))
+      }
+    }, 'image/png')
+  })
 }
 
 function getQuoteFilename(quote: string) {
@@ -165,18 +182,38 @@ function getQuoteFilename(quote: string) {
   return `qwp-${quoteSlug || 'quote'}.png`
 }
 
-function createWallpaper(
+function getUniqueFilename(filename: string, usedFilenames: Set<string>) {
+  if (!usedFilenames.has(filename)) {
+    usedFilenames.add(filename)
+    return filename
+  }
+
+  const extensionIndex = filename.lastIndexOf('.')
+  const name = extensionIndex === -1 ? filename : filename.slice(0, extensionIndex)
+  const extension = extensionIndex === -1 ? '' : filename.slice(extensionIndex)
+  let count = 2
+  let nextFilename = `${name}-${count}${extension}`
+
+  while (usedFilenames.has(nextFilename)) {
+    count += 1
+    nextFilename = `${name}-${count}${extension}`
+  }
+
+  usedFilenames.add(nextFilename)
+  return nextFilename
+}
+
+async function createWallpaper(
   quote: string,
   resolution: Resolution,
   backgroundColor: string,
-  textColor: string,
-  filename: string
+  textColor: string
 ) {
   const canvas = document.createElement('canvas')
   const context = canvas.getContext('2d')
 
   if (!context) {
-    return
+    throw new Error('Unable to create wallpaper canvas.')
   }
 
   canvas.width = resolution.width
@@ -209,7 +246,7 @@ function createWallpaper(
     textY += lineHeight
   }
 
-  downloadCanvas(canvas, filename)
+  return getCanvasBlob(canvas)
 }
 
 function App() {
@@ -218,6 +255,7 @@ function App() {
   const [textColor, setTextColor] = useState('#ffffff')
   const [selectedResolution, setSelectedResolution] = useState(resolutions[0])
   const [focusedQuoteId, setFocusedQuoteId] = useState<string | null>(null)
+  const [isCreating, setIsCreating] = useState(false)
   const formRef = useRef<HTMLFormElement | null>(null)
   const quoteTextareaRefs = useRef<Record<string, HTMLTextAreaElement | null>>({})
 
@@ -249,27 +287,30 @@ function App() {
     )
   }
 
-  const deleteQuote = useCallback((id: string) => {
-    setQuotes((currentQuotes) => {
-      if (currentQuotes.length === 1) {
-        const nextQuote = createQuoteInput()
+  const deleteQuote = useCallback(
+    (id: string) => {
+      setQuotes((currentQuotes) => {
+        if (currentQuotes.length === 1) {
+          const nextQuote = createQuoteInput()
 
-        focusQuote(nextQuote.id)
-        return [nextQuote]
-      }
+          focusQuote(nextQuote.id)
+          return [nextQuote]
+        }
 
-      const deletedQuoteIndex = currentQuotes.findIndex((currentQuote) => currentQuote.id === id)
-      const nextQuotes = currentQuotes.filter((currentQuote) => currentQuote.id !== id)
-      const nextFocusedQuote =
-        nextQuotes[Math.min(Math.max(deletedQuoteIndex, 0), nextQuotes.length - 1)]
+        const deletedQuoteIndex = currentQuotes.findIndex((currentQuote) => currentQuote.id === id)
+        const nextQuotes = currentQuotes.filter((currentQuote) => currentQuote.id !== id)
+        const nextFocusedQuote =
+          nextQuotes[Math.min(Math.max(deletedQuoteIndex, 0), nextQuotes.length - 1)]
 
-      if (nextFocusedQuote) {
-        focusQuote(nextFocusedQuote.id)
-      }
+        if (nextFocusedQuote) {
+          focusQuote(nextFocusedQuote.id)
+        }
 
-      return nextQuotes
-    })
-  }, [focusQuote])
+        return nextQuotes
+      })
+    },
+    [focusQuote]
+  )
 
   const deleteFocusedQuote = useCallback(() => {
     if (focusedQuoteId) {
@@ -300,23 +341,43 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [addQuote, deleteFocusedQuote])
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
-    quotes
-      .map((quote) => quote.value)
-      .filter((quote) => quote.trim())
-      .forEach((quote) => {
-        createWallpaper(
-          quote,
-          selectedResolution,
-          backgroundColor,
-          textColor,
-          getQuoteFilename(quote)
-        )
-      })
+    const quotesToCreate = quotes.map((quote) => quote.value).filter((quote) => quote.trim())
 
-    setQuotes([createQuoteInput()])
+    if (!quotesToCreate.length || isCreating) {
+      return
+    }
+
+    setIsCreating(true)
+
+    try {
+      const usedFilenames = new Set<string>()
+      const wallpapers = await Promise.all(
+        quotesToCreate.map(async (quote) => ({
+          filename: getUniqueFilename(getQuoteFilename(quote), usedFilenames),
+          blob: await createWallpaper(quote, selectedResolution, backgroundColor, textColor),
+        }))
+      )
+
+      if (wallpapers.length === 1) {
+        downloadBlob(wallpapers[0].blob, wallpapers[0].filename)
+      } else {
+        const zip = new JSZip()
+
+        for (const wallpaper of wallpapers) {
+          zip.file(wallpaper.filename, wallpaper.blob)
+        }
+
+        const zipBlob = await zip.generateAsync({ type: 'blob' })
+        downloadBlob(zipBlob, 'quote-wallpapers.zip')
+      }
+
+      setQuotes([createQuoteInput()])
+    } finally {
+      setIsCreating(false)
+    }
   }
 
   return (
@@ -434,9 +495,9 @@ function App() {
               className="w-full"
               aria-keyshortcuts="Control+S Meta+S"
               title="Create wallpapers (Ctrl+S or Cmd+S)"
-              disabled={!quotes.some((quote) => quote.value.trim())}
+              disabled={isCreating || !quotes.some((quote) => quote.value.trim())}
             >
-              Create Wallpapers
+              {isCreating ? 'Creating...' : 'Create Wallpapers'}
             </Button>
           </CardFooter>
         </Card>
